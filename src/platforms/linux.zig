@@ -9,6 +9,7 @@ const IN_CREATE: u32 = 0x0000_0100;
 const IN_DELETE: u32 = 0x0000_0200;
 const IN_MOVE: u32 = 0x0000_00c0;
 const IN_DELETE_SELF: u32 = 0x0000_0400;
+const IN_IGNORED: u32 = 0x0000_8000;
 
 pub const Watcher = struct {
     watch_fd: posix.fd_t = -1,
@@ -62,11 +63,20 @@ pub const Watcher = struct {
     }
 
     fn parseEvents(self: *Watcher, buffer: []const u8, length: usize) i32 {
+        const header_size = @sizeOf(linux.inotify_event);
         var i: usize = 0;
         var found = false;
 
-        while (i < length) {
-            const event: *const linux.inotify_event = @ptrCast(@alignCast(buffer.ptr + i));
+        while (i + header_size <= length) {
+            var event: linux.inotify_event = undefined;
+            @memcpy(std.mem.asBytes(&event), buffer[i..][0..header_size]);
+
+            if (event.mask & IN_IGNORED != 0) {
+                self.last_event = .deleted;
+                found = true;
+                i += header_size + event.len;
+                continue;
+            }
 
             if (event.mask & (IN_DELETE | IN_DELETE_SELF) != 0) {
                 self.last_event = .deleted;
@@ -79,7 +89,7 @@ pub const Watcher = struct {
             }
 
             found = true;
-            i += @sizeOf(linux.inotify_event) + event.len;
+            i += header_size + event.len;
         }
 
         return if (found) 1 else 0;

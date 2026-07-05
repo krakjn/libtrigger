@@ -54,20 +54,33 @@ pub fn build(b: *std.Build) void {
         b.installArtifact(exe);
     }
 
-    if (target.result.os.tag == .linux) {
+    const test_supported = switch (target.result.os.tag) {
+        .linux, .macos, .windows => true,
+        else => false,
+    };
+    if (test_supported) {
+        const test_sources = [_][]const u8{
+            "tests/common/harness.c",
+            "tests/cases/test_modified.c",
+            "tests/cases/test_deleted.c",
+            "tests/cases/test_created.c",
+            "tests/main.c",
+        };
+
         const test_mod = b.createModule(.{
             .target = target,
             .optimize = optimize,
             .link_libc = true,
         });
         test_mod.addIncludePath(b.path("include"));
-        test_mod.addCSourceFile(.{
-            .file = b.path("examples/test_linux_events.c"),
-        });
+        test_mod.addIncludePath(b.path("tests/common"));
+        for (test_sources) |src| {
+            test_mod.addCSourceFile(.{ .file = b.path(src) });
+        }
         test_mod.linkLibrary(lib);
 
         const test_exe = b.addExecutable(.{
-            .name = "test_linux_events",
+            .name = "events_test",
             .root_module = test_mod,
         });
         b.installArtifact(test_exe);
@@ -75,7 +88,7 @@ pub fn build(b: *std.Build) void {
         const run_test = b.addRunArtifact(test_exe);
         if (b.args) |args| run_test.addArgs(args);
 
-        const test_step = b.step("test", "Run Linux file event integration tests");
+        const test_step = b.step("test", "Run native file event integration tests");
         test_step.dependOn(&run_test.step);
     }
 

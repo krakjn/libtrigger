@@ -26,7 +26,7 @@ enter:
     docker run --rm -it -v $PWD:/app -w /app trigger /bin/bash
 
 test-linux:
-    docker run --rm -v $PWD:/app -w /app -u $(id -u):$(id -g) trigger ./examples/run_linux_event_tests.sh
+    docker run --rm -v $PWD:/app -w /app -u $(id -u):$(id -g) trigger ./tests/run_tests.sh
 
 clean:
     rm -rf zig-out zig-cache .zig-cache

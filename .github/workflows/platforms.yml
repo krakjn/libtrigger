@@ -1,0 +1,51 @@
+name: platforms
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            zig_archive: zig-x86_64-linux-0.16.0.tar.xz
+            zig_dir: zig-x86_64-linux-0.16.0
+          - os: macos-latest
+            zig_archive: zig-aarch64-macos-0.16.0.tar.xz
+            zig_dir: zig-aarch64-macos-0.16.0
+          - os: windows-latest
+            zig_archive: zig-x86_64-windows-0.16.0.zip
+            zig_dir: zig-x86_64-windows-0.16.0
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Zig 0.16.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIG_VERSION=0.16.0
+          ZIG_URL="https://ziglang.org/download/${ZIG_VERSION}/${{ matrix.zig_archive }}"
+          if [[ "${{ matrix.zig_archive }}" == *.zip ]]; then
+            curl -fSL "$ZIG_URL" -o zig.zip
+            unzip -q zig.zip
+          else
+            curl -fSL "$ZIG_URL" -o zig.tar.xz
+            tar -xJf zig.tar.xz
+          fi
+          echo "$PWD/${{ matrix.zig_dir }}" >> "$GITHUB_PATH"
+
+      - name: Build
+        shell: bash
+        run: zig build
+
+      - name: Run integration tests
+        shell: bash
+        run: zig build test

@@ -76,6 +76,7 @@
         "include",
         "src",
         "examples",
+        "tests",
         "LICENSE",
         "README.md",
     },

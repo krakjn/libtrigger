@@ -136,3 +136,18 @@ Full per-watcher thread safety (including safe destroy-during-wait) may be added
 - `0` — success (start/stop)
 - `-1` — error
 - `1` — change detected (`check` / `wait`)
+
+## CI
+
+| Workflow | Purpose |
+|----------|---------|
+| [`ci.yml`](.github/workflows/ci.yml) | Cross-compile all targets and build release packages |
+| [`platforms.yml`](.github/workflows/platforms.yml) | Native build + integration tests on Linux, macOS, and Windows |
+
+Run the same integration tests locally:
+
+```bash
+zig build test
+```
+
+See [`tests/`](tests/) for details.
