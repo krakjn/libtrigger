@@ -5,6 +5,10 @@
 #include <string.h>
 
 #ifdef _WIN32
+#include <direct.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <io.h>
 #include <windows.h>
 static void sleep_ms(int ms) {
     Sleep((DWORD)ms);
@@ -83,18 +87,25 @@ int wait_for_any_event(file_watcher_t* watcher, const int* expected, size_t coun
 int make_temp_file_path(char* path, size_t cap, const char* tag) {
 #ifdef _WIN32
     char tmp_dir[MAX_PATH];
+    char tmp_file[MAX_PATH];
+    (void)tag;
     if (GetTempPathA(sizeof(tmp_dir), tmp_dir) == 0) {
         return -1;
     }
-    if (snprintf(path, cap, "%strigger-%s-XXXXXX", tmp_dir, tag) >= (int)cap) {
+    if (GetTempFileNameA(tmp_dir, "trg", 0, tmp_file) == 0) {
         return -1;
     }
+    if (snprintf(path, cap, "%s", tmp_file) >= (int)cap) {
+        _unlink(tmp_file);
+        return -1;
+    }
+    return _open(path, _O_RDWR | _O_BINARY);
 #else
     if (snprintf(path, cap, "/tmp/trigger-%s-XXXXXX", tag) >= (int)cap) {
         return -1;
     }
-#endif
     return mkstemp(path);
+#endif
 }
 
 int make_temp_dir(char* path, size_t cap) {
@@ -103,15 +114,24 @@ int make_temp_dir(char* path, size_t cap) {
     if (GetTempPathA(sizeof(tmp_dir), tmp_dir) == 0) {
         return -1;
     }
-    if (snprintf(path, cap, "%strigger-dir-XXXXXX", tmp_dir) >= (int)cap) {
-        return -1;
+    for (unsigned attempt = 0; attempt < 100; attempt++) {
+        if (snprintf(path, cap, "%strigger-dir-%08x", tmp_dir, (unsigned)(GetTickCount() ^ attempt)) >= (int)cap) {
+            return -1;
+        }
+        if (_mkdir(path) == 0) {
+            return 0;
+        }
+        if (errno != EEXIST) {
+            return -1;
+        }
     }
+    return -1;
 #else
     if (snprintf(path, cap, "/tmp/trigger-dir-XXXXXX") >= (int)cap) {
         return -1;
     }
-#endif
     return mkdtemp(path) ? 0 : -1;
+#endif
 }
 
 int run_tests(const char* platform, const test_case_t* cases, size_t count) {

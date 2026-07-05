@@ -6,7 +6,9 @@
 #include <string.h>
 
 #ifdef _WIN32
+#include <direct.h>
 #include <io.h>
+#include <sys/stat.h>
 #define unlink _unlink
 #define rmdir _rmdir
 #define open _open
