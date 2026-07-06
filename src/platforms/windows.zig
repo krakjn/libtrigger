@@ -85,7 +85,7 @@ pub const Watcher = struct {
     dir_handle: windows.HANDLE = windows.INVALID_HANDLE_VALUE,
     event_handle: windows.HANDLE = windows.INVALID_HANDLE_VALUE,
     filename_utf16: []windows.WCHAR = &[_]windows.WCHAR{},
-    buffer: [8192]u8 = undefined,
+    buffer: [8192]u8 align(@alignOf(FILE_NOTIFY_INFORMATION)) = undefined,
     overlapped: OVERLAPPED = std.mem.zeroes(OVERLAPPED),
     read_pending: bool = false,
     last_event: Event = .modified,
@@ -97,7 +97,9 @@ pub const Watcher = struct {
         const dir_utf16 = std.unicode.utf8ToUtf16LeAllocZ(std.heap.page_allocator, split.dir) catch return -1;
         defer std.heap.page_allocator.free(dir_utf16);
 
-        self.filename_utf16 = std.unicode.utf8ToUtf16LeAllocZ(std.heap.page_allocator, split.base) catch return -1;
+        // Watch the parent directory and filter notifications by base filename.
+        // utf8ToUtf16LeAlloc (not AllocZ): FileNameLength excludes the null terminator.
+        self.filename_utf16 = std.unicode.utf8ToUtf16LeAlloc(std.heap.page_allocator, split.base) catch return -1;
 
         const event = CreateEventW(null, TRUE, FALSE, null) orelse {
             std.heap.page_allocator.free(self.filename_utf16);
@@ -124,6 +126,42 @@ pub const Watcher = struct {
         }
 
         self.overlapped.hEvent = self.event_handle;
+        // Post the first read here so changes that happen before the first poll()
+        // are not missed (ReadDirectoryChangesW is not retroactive).
+        return self.beginRead();
+    }
+
+    fn beginRead(self: *Watcher) i32 {
+        self.overlapped.Internal = 0;
+        self.overlapped.InternalHigh = 0;
+        self.overlapped.Offset = 0;
+        self.overlapped.OffsetHigh = 0;
+        _ = ResetEvent(self.event_handle);
+
+        var bytes_returned: windows.DWORD = 0;
+        const ok = ReadDirectoryChangesW(
+            self.dir_handle,
+            self.buffer[0..].ptr,
+            @intCast(self.buffer.len),
+            FALSE,
+            FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE,
+            &bytes_returned,
+            &self.overlapped,
+            null,
+        );
+
+        if (ok == FALSE) {
+            const err = GetLastError();
+            if (err != .IO_PENDING) return -1;
+            self.read_pending = true;
+            return 0;
+        }
+        if (bytes_returned > 0) {
+            return self.parseBuffer(bytes_returned);
+        }
+        // Overlapped ReadDirectoryChangesW can return TRUE with lpBytesReturned == 0.
+        // The read is still active; wait on hEvent instead of re-issuing each poll.
+        self.read_pending = true;
         return 0;
     }
 
@@ -150,31 +188,9 @@ pub const Watcher = struct {
         if (self.dir_handle == windows.INVALID_HANDLE_VALUE) return -1;
 
         if (!self.read_pending) {
-            self.overlapped.Internal = 0;
-            self.overlapped.InternalHigh = 0;
-            self.overlapped.Offset = 0;
-            self.overlapped.OffsetHigh = 0;
-            _ = ResetEvent(self.event_handle);
-
-            var bytes_returned: windows.DWORD = 0;
-            const ok = ReadDirectoryChangesW(
-                self.dir_handle,
-                &self.buffer,
-                @intCast(self.buffer.len),
-                FALSE,
-                FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE,
-                &bytes_returned,
-                &self.overlapped,
-                null,
-            );
-
-            if (ok == FALSE) {
-                const err = GetLastError();
-                if (err != .IO_PENDING) return -1;
-                self.read_pending = true;
-            } else {
-                return self.parseBuffer(bytes_returned);
-            }
+            const result = self.beginRead();
+            // result == 0 with read_pending: fall through and wait on the event below.
+            if (result != 0 or !self.read_pending) return result;
         }
 
         const timeout: windows.DWORD = if (blocking) INFINITE else 0;
@@ -203,18 +219,27 @@ pub const Watcher = struct {
         var found = false;
 
         while (offset < bytes_returned) {
-            const info: *const FILE_NOTIFY_INFORMATION = @ptrCast(@alignCast(self.buffer[offset..].ptr));
-            const name_bytes = info.FileNameLength;
-            const name_ptr: [*]const windows.WCHAR = @alignCast(@ptrCast(&self.buffer[offset + @offsetOf(FILE_NOTIFY_INFORMATION, "FileName")]));
-            const name_wide: []const windows.WCHAR = name_ptr[0 .. name_bytes / 2];
+            const entry = self.buffer[offset..bytes_returned];
+            if (entry.len < 12) break;
 
-            if (std.mem.eql(u16, name_wide, self.filename_utf16)) {
-                self.last_event = mapAction(info.Action);
+            // Parse fields manually; casting the u8 buffer to FILE_NOTIFY_INFORMATION
+            // misreads FileNameLength when entries are not naturally aligned.
+            const next_entry_offset = std.mem.readInt(u32, entry[0..4], .little);
+            const action = std.mem.readInt(u32, entry[4..8], .little);
+            const name_bytes = std.mem.readInt(u32, entry[8..12], .little);
+            if (12 + name_bytes > entry.len) break;
+
+            const name_utf16_bytes = entry[12 .. 12 + name_bytes];
+            const expected_utf16_bytes = std.mem.sliceAsBytes(self.filename_utf16);
+
+            // Compare as raw UTF-16 bytes to avoid alignment requirements on WCHAR slices.
+            if (std.mem.eql(u8, name_utf16_bytes, expected_utf16_bytes)) {
+                self.last_event = mapAction(action);
                 found = true;
             }
 
-            if (info.NextEntryOffset == 0) break;
-            offset += info.NextEntryOffset;
+            if (next_entry_offset == 0) break;
+            offset += next_entry_offset;
         }
 
         return if (found) 1 else 0;
