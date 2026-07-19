@@ -7,7 +7,7 @@ A cross-platform C library for watching files and calling callbacks when events 
 - **Cross-platform**: Linux (inotify), macOS (kqueue), Windows (`ReadDirectoryChangesW`)
 - **Simple API**: Callback-based interface
 - **Event types**: Modifications, creations, deletions
-- **Blocking and non-blocking**: `trigger_wait_for_changes` or `trigger_check_changes`
+- **Blocking and non-blocking**: `trigger_recv` or `trigger_try_recv`
 
 ## Building
 
@@ -35,7 +35,7 @@ Four example programs live in [`examples/`](examples/). Build them with `zig bui
 
 | Binary | Pattern |
 |--------|---------|
-| `single_thread_one_watcher` | One thread, one file, blocking wait |
+| `single_thread_one_watcher` | One thread, one file, blocking recv |
 | `single_thread_multi_watcher` | One thread polls many watchers |
 | `multi_thread_one_watcher` | Dedicated watcher thread + event queue (POSIX) |
 | `multi_thread_multi_watcher` | One thread per watcher (POSIX) |
@@ -50,42 +50,49 @@ echo hello >> /tmp/test.txt
 
 ## API Reference
 
+See [`include/trigger.h`](include/trigger.h) for the full public API. The watcher type is opaque; the Zig implementation is `trigger_watcher` in [`src/watcher.zig`](src/watcher.zig).
+
 ### Functions
 
-- `trigger_create_watcher(filepath, callback)` — create a watcher
-- `trigger_start_watching(watcher)` — start watching (`0` ok, `-1` error)
-- `trigger_stop_watching(watcher)` — stop watching
-- `trigger_check_changes(watcher)` — non-blocking poll (`1` event, `0` none, `-1` error)
-- `trigger_wait_for_changes(watcher)` — blocking wait (same return codes)
-- `trigger_destroy_watcher(watcher)` — free the watcher
-- `trigger_get_event_string(event_type)` — `"MODIFIED"`, `"CREATED"`, `"DELETED"`, or `"UNKNOWN"`
+- `trigger_init(filepath, callback)` — create a watcher (returns pointer, or `NULL` on error)
+- `trigger_start(watcher)` — start watching (`TRIGGER_OK` / `TRIGGER_ERROR`)
+- `trigger_stop(watcher)` — stop watching (`TRIGGER_OK` / `TRIGGER_ERROR`)
+- `trigger_try_recv(watcher)` — non-blocking poll (`TRIGGER_EVENT_*`, `TRIGGER_OK` if none, or `TRIGGER_ERROR`)
+- `trigger_recv(watcher)` — blocking wait (`TRIGGER_EVENT_*` or `TRIGGER_ERROR`)
+- `trigger_destroy(watcher)` — free the watcher (`TRIGGER_OK` / `TRIGGER_ERROR`)
 
-### Event types
+### Results and event types
 
-- `FILE_EVENT_MODIFIED`
-- `FILE_EVENT_CREATED`
-- `FILE_EVENT_DELETED`
+```c
+typedef enum {
+    TRIGGER_OK = 0,
+    TRIGGER_ERROR = -1,
+    TRIGGER_EVENT_MODIFIED = 1,
+    TRIGGER_EVENT_CREATED = 2,
+    TRIGGER_EVENT_DELETED = 3,
+} TRIGGER_RESULT;
+```
 
 ### Callback
 
 ```c
-typedef void (*file_change_callback_t)(const char* filepath, int event_type);
+typedef void (*trigger_callback_t)(const char* filepath, int event_type);
 ```
 
-The callback runs on the thread that called `trigger_check_changes` or `trigger_wait_for_changes`.
+The callback runs on the thread that called `trigger_try_recv` or `trigger_recv`. `event_type` is one of the `TRIGGER_EVENT_*` values.
 
 ## Thread safety
 
-The library does **not** use internal locking. Each `file_watcher_t` must be driven from **one thread** for its entire lifetime.
+The library does **not** use internal locking. Each `trigger_watcher_t` must be driven from **one thread** for its entire lifetime.
 
 | Pattern | Supported? |
 |---------|------------|
 | One thread owns one watcher | Yes |
-| One thread polls many watchers (`trigger_check_changes` loop) | Yes |
+| One thread polls many watchers (`trigger_try_recv` loop) | Yes |
 | Different watchers on different threads (one watcher per thread) | Yes |
 | Dedicated watcher thread; other threads consume events via your own queue | Yes (application pattern) |
 | Two or more threads calling `trigger_*` on the **same** watcher | **No** |
-| `trigger_destroy_watcher` while another thread is in `trigger_wait_for_changes` | **No** |
+| `trigger_destroy` while another thread is in `trigger_recv` | **No** |
 | Calling `trigger_*` on the same watcher from inside its callback | **No** |
 
 Example mapping:
@@ -101,25 +108,25 @@ Example mapping:
 
 ```c
 // Thread A                          Thread B
-trigger_wait_for_changes(w);         trigger_stop_watching(w);  // race
+trigger_recv(w);                     trigger_stop(w);  // race
 ```
 
-**Destroy while waiting** — use-after-free risk; blocked `wait` is not woken up.
+**Destroy while waiting** — use-after-free risk; blocked `recv` is not woken up.
 
 ```c
-// Thread A: trigger_wait_for_changes(w);  (blocked)
-// Thread B: trigger_destroy_watcher(w);
+// Thread A: trigger_recv(w);  (blocked)
+// Thread B: trigger_destroy(w);
 ```
 
 **Re-enter from callback** — callback runs on the waiter thread; nested calls deadlock or corrupt state.
 
 ```c
 void on_change(const char* path, int type) {
-    trigger_check_changes(watcher);  // do not do this
+    trigger_try_recv(watcher);  // do not do this
 }
 ```
 
-**Shared global watcher** — multiple threads calling `trigger_check_changes(same_w)` is not supported.
+**Shared global watcher** — multiple threads calling `trigger_try_recv(same_w)` is not supported.
 
 Full per-watcher thread safety (including safe destroy-during-wait) may be added in a future release; it is not in scope today.
 
@@ -133,9 +140,11 @@ Full per-watcher thread safety (including safe destroy-during-wait) may be added
 
 ## Error handling
 
-- `0` — success (start/stop)
-- `-1` — error
-- `1` — change detected (`check` / `wait`)
+| Value | Meaning |
+|-------|---------|
+| `TRIGGER_OK` | Success (`start` / `stop` / `destroy`), or no event yet (`try_recv`) |
+| `TRIGGER_ERROR` | Error |
+| `TRIGGER_EVENT_MODIFIED` / `CREATED` / `DELETED` | Event delivered (`try_recv` / `recv`); callback was also invoked |
 
 ## CI
 

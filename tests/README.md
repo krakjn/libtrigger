@@ -16,9 +16,9 @@ tests/
 
 | Test | Verifies |
 |------|----------|
-| `modified` | Append to a watched file fires `FILE_EVENT_MODIFIED` |
-| `deleted` | Removing a watched file fires `FILE_EVENT_DELETED` |
-| `created` | Creating a file under a watch fires `FILE_EVENT_CREATED` |
+| `modified` | Append to a watched file fires `TRIGGER_EVENT_MODIFIED` |
+| `deleted` | Removing a watched file fires `TRIGGER_EVENT_DELETED` |
+| `created` | Creating a file under a watch fires `TRIGGER_EVENT_CREATED` |
 
 Platform notes in `test_created.c`:
 

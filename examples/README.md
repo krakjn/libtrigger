@@ -4,8 +4,8 @@ Four programs demonstrating supported usage patterns. See the root [README](../R
 
 | Binary | Threads | Watchers | Pattern |
 |--------|---------|----------|---------|
-| `single_thread_one_watcher` | 1 | 1 | Blocking wait loop |
-| `single_thread_multi_watcher` | 1 | N | Round-robin `trigger_check_changes` |
+| `single_thread_one_watcher` | 1 | 1 | Blocking `trigger_recv` loop |
+| `single_thread_multi_watcher` | 1 | N | Round-robin `trigger_try_recv` |
 | `multi_thread_one_watcher` | 2+ | 1 | Dedicated watcher thread + event queue |
 | `multi_thread_multi_watcher` | N | N | One pthread owns each watcher |
 
